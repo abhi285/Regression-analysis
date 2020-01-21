@@ -1,0 +1,318 @@
+---
+output:
+  word_document: default
+  pdf_document: default
+  html_document: default
+---
+
+#Practice of modeling the landing distance using linear regression.
+
+##Initial exploration of the data
+
+**step1**
+
+```{r, warning=FALSE}
+library(readxl)
+library(dplyr)
+library(ggcorrplot)
+library(lattice)
+library(ggplot2)
+library(tidyr)
+
+
+FAA1 <- read_xls(path="G:/StatModeling/FAA1-1.xls",  col_names = TRUE)
+FAA2 <- read_xls(path="G:/StatModeling/FAA2-1.xls", col_names = TRUE)
+```
+
+**step2**
+
+Dataset: FAA1
+
+Sample Size: 800
+
+Number of variables: 8
+```{r}
+str(FAA1)
+```
+
+Dataset: FAA2
+
+Sample Size: 150
+
+Number of variables: 7
+
+1. The variable: duration is not present in the dataset: FAA2 
+
+2. There is a difference in the Number of rows in both
+```{r}
+str(FAA2)
+```
+
+**step3**
+
+####Yes, we see there are 100 rows which are duplicates coming after combining the datsets. 
+####We remove those rows from the final dataset used for analysis since these are anomalies.
+
+```{r}
+FAA2<-mutate(FAA2,duration=NA)
+FAA_merge<-rbind(FAA1,FAA2)
+FAA_unique <- FAA_merge[-which(duplicated(FAA_merge[,c(1,3,4,5,6,7,8)])),]
+```
+
+**step4**
+
+####Structure of combined dataset:
+
+Dataset: FAA_unique
+
+Sample Size: 850
+
+Number of variables: 8
+```{r}
+str(FAA_unique)
+```
+
+####One important observation is that there are lot of Null values in column Speed Air (642 records), whcih can the further have a big impact on our prediction.
+
+
+**step5**
+
++ We have one categorical and 6 other Numerical variables available with us which could potentially impact Landing distance.
+
++ The variable speed_air has 642 missing values, which is almost 2/3rds of its total number of rows.
+
++ We have 850 total observations after merging the two datsets.
+
++ Duration was not present in the seocn datset hence we have imputed NA's where there was missing values.
+
++ We further have to clean the data acoording to the variable dictionary before developing any sort of model on the same.
+
+#Data Cleaning and further exploration
+
+**step6**
+
+```{r}
+summary(FAA_unique)
+```
+####The data was filtered as:
+ 
++ Since air speedcolumn has around 642 NA values we will not consider this column.
+
++ The duration of a normal flight should always be greater than 40min.
+
++ If ground speed value is value is less than 30MPH or greater than 140MPH, then the landing would be considered as abnormal
+
++ If airspeed value is less than 30MPH or greater than 140MPH, then the landing would be considered as abnormal.
+
++ The landing aircraft is required to be at least 6 meters high at the threshold of the runway.
+
++ The length of the airport runway is typically less than 6000 feet.
+
+```{r}
+FAAnew <- FAA_unique %>% 
+  filter(duration >40 | is.na(duration) ) %>% filter(speed_ground >=30 & speed_ground <=140 ) %>% 
+  filter( height>6 ) %>% filter (distance <6000)  %>%
+  filter ((speed_air>=30 & speed_air<=140) | is.na(speed_air))
+summary(FAAnew)
+```
+## Observations:
+
+####19 abnormal rows removed.
+
+## Combined Dataset
+
+Dataset: FAAnew
+
+Sample Size: 831
+
+Number of variables: 8
+
+Distribution Plots
+```{r}
+#plotting the distribution f all variables.
+par(mfrow=c(3,3))
+hist(FAAnew$duration)
+hist(FAAnew$no_pasg)
+hist(FAAnew$speed_ground)
+hist(FAAnew$height)
+hist(FAAnew$pitch)
+hist(log(FAAnew$distance))
+hist(log(FAAnew$speed_air))
+```
+## Observation
+
++ 642 missing values in speed Air Column 
+
++ 831 rows remaining after filtering the values according to variable dictionary.
+
++ 50 Missing values in duration column
+
++ All 8 variables still will be used for model building
+
++ We have approximate normal distribution of all the variables (except Air speed which is left skewed), hence can go ahead with Linear regression.
+
+
+###Initial analysis for identifying important factors that impact the response variable "landing distance
+
+*step10*
+
+```{r}
+FAAnew$aircraft <- ifelse(FAAnew$aircraft== "airbus", 0, 1)
+
+Cor_table <- as.data.frame(cor(FAAnew[,which(!sapply(FAAnew,typeof)=="character")],FAAnew$distance))
+
+TABLE1 <- as.data.frame (cbind(variables=row.names(Cor_table),abs_value=as.numeric(abs(Cor_table[,1]),digits=3),direction=sign(Cor_table[,1]))) %>% arrange(desc(abs_value) )
+
+class(FAAnew$speed_air)
+
+FAAnew[,which(!sapply(FAAnew,typeof)=="character")] %>%
+  gather(-distance, key = "var", value = "value") %>% 
+  ggplot(aes(x = value, y = distance)) +
+    geom_point() +
+    facet_wrap(~ var, scales = "free") +
+    theme_bw()
+
+class(FAAnew$aircraft)
+# Mapping the aircraft to numerical values
+#TABLE1
+TABLE1
+```
+#### We have converted the categorical variable to 0/1 to be included in the model.
+
+### Regression using a single factor each time
+
+*Step 13*
+
+```{r}
+fit_lm<-lm( distance~.,data =FAAnew)
+summary(fit_lm)
+TABLE2 <- as.data.frame(cbind(varname=rownames(as.data.frame(fit_lm$coefficients)),pvalue= abs(as.numeric(summary(fit_lm)$coefficients[,4])) , direction =sign(as.data.frame(as.numeric(fit_lm$coefficients))[,1]))) %>% arrange(desc(pvalue))
+#table 2
+as.numeric(summary(fit_lm)$coefficients[,4])
+TABLE2
+
+fit_lm_std<-lm( scale(distance)~FAAnew$aircraft+scale(FAAnew$duration)+
+              scale(FAAnew$no_pasg)+scale(FAAnew$speed_ground)
+            +scale(FAAnew$speed_air)+scale(FAAnew$height)+
+              scale(FAAnew$pitch),data =FAAnew)
+summary(fit_lm_std)
+
+TABLE3 <- as.data.frame(cbind(varname=rownames(as.data.frame(fit_lm_std$coefficients)),pvalue= abs(as.numeric(summary(fit_lm_std)$coefficients[,4])) , direction =sign(as.data.frame(as.numeric(fit_lm_std$coefficients))[,1]))) %>% arrange(desc(pvalue))
+
+TABLE0 <- cbind(TABLE1,TABLE2,TABLE3)
+TABLE0
+
+```
+
+#### From the above table zero the the only change that has happened is that in scaled model the distance ground has become less significant. although form Table1 we do see a high significance between Landing distance and distance_ground this can point to multicollinearity in the model with some other variable. We will check the same below.
+
+**step 16**
+
+### Check collinearity of the models
+
+```{r}
+model1<-lm( distance~speed_ground,data =FAAnew)
+model2<-lm( distance~speed_air,data =FAAnew)
+model3<-lm( distance~speed_ground+speed_air,data =FAAnew)
+
+summary(model1)$coefficients
+summary(model2)$coefficients
+summary(model3)$coefficients
+
+
+```
+
+####The sign of speed ground changes
+####There is a high correlated between ground speed and air speed.
+####Both these factors are significant but since we have lot of missing valjues in Air speed we will select ground speed.
+
+**step 17**
+
+## Variable selection based on our ranking table
+```{r}
+
+Model_Rsq_1 <- lm(distance ~ aircraft, data = FAAnew)
+Model_Rsq_2 <- lm(distance ~ aircraft + speed_ground, 
+                       data = FAAnew)
+Model_Rsq_3 <- lm(distance ~ aircraft + speed_ground + height,
+                       data = FAAnew)
+Model_Rsq_4 <- lm(distance ~ aircraft + speed_ground + height 
+                       + no_pasg, data =FAAnew)
+Model_Rsq_5 <- lm(distance ~ aircraft + speed_ground + height 
+                       + no_pasg + pitch, data = FAAnew)
+Model_Rsq_6 <- lm(distance ~ aircraft + speed_ground + height 
+                       + no_pasg + pitch + duration, data = FAAnew)
+Rsq <- c()
+Rsq[1] <- summary(Model_Rsq_1)$r.squared
+Rsq[2] <- summary(Model_Rsq_2)$r.squared
+Rsq[3] <- summary(Model_Rsq_3)$r.squared
+Rsq[4] <- summary(Model_Rsq_4)$r.squared
+Rsq[5] <- summary(Model_Rsq_5)$r.squared
+Rsq[6] <- summary(Model_Rsq_6)$r.squared
+  
+
+```
+
+## Now with adjusted R square
+
+```{r}
+AdjRsq <- c()
+AdjRsq[1] <- summary(Model_Rsq_1)$adj.r.squared
+AdjRsq[2] <- summary(Model_Rsq_2)$adj.r.squared
+AdjRsq[3] <- summary(Model_Rsq_3)$adj.r.squared
+AdjRsq[4] <- summary(Model_Rsq_4)$adj.r.squared
+AdjRsq[5] <- summary(Model_Rsq_5)$adj.r.squared
+AdjRsq[6] <- summary(Model_Rsq_6)$adj.r.squared
+
+
+par(mfrow = c(2,2))
+plot(1:6, Rsq, main ="R square value vs Variables")
+
+
+
+plot(1:6, AdjRsq, main ="Adjusted R square value vs Variables")
+
+AICVal <- c()
+AICVal[1] <- AIC(Model_Rsq_1)
+AICVal[2] <-AIC(Model_Rsq_2)
+AICVal[3] <-AIC(Model_Rsq_3)
+AICVal[4] <-AIC(Model_Rsq_4)
+AICVal[5] <-AIC(Model_Rsq_5)
+AICVal[6] <-AIC(Model_Rsq_6)
+
+
+plot(1:6, AICVal, main ="AIC values vs Variables")
+
+
+
+```
+**step 20**
+
+##### We observer after 2 variables there are no significant improvement in the R square value
+
+##### We would select speed_ground, aircraft and height as the final predictors
+
+**step 21**
+
+### Step AIC
+
+```{r}
+small_lm  <- lm(distance ~ 1, data = FAAnew[,-5])
+big_lm <- lm(distance ~ ., data = FAAnew[,-5])
+forward <- step(small_lm,scope = list( lower = small_lm, upper = big_lm),
+                     direction = "forward")
+summary(forward)
+```
+
+
+#### From StepAIC forward selection we can conclude speed_ground, aircraft and height as the final predictors with the minimum AIC. Camparing the results to step 19 we see the same results (excect that we have removed Speed Air due to missing values). 
+
+
+## Conclusion
+
+
+####1. We have to remove Air Speed variable even though there is a high correlation between airspeed and landing distance as there are lot of missing values for the variable.
+
+####2. Ground Speed, Aircraft anf Height and the most important factors impacting Landing distance.
+
+
